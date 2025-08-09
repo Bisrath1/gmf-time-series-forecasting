@@ -32,24 +32,23 @@ def create_lstm_dataset(series, look_back=60):
         y.append(series[i+look_back])
     return np.array(X), np.array(y)
 
-def lstm_forecast(train, test, epochs=20, batch_size=32):
+def lstm_forecast(train, test, epochs=20, batch_size=32, look_back=60, lstm_units=50):
     scaler = MinMaxScaler()
     train_scaled = scaler.fit_transform(train.values.reshape(-1,1))
     test_scaled = scaler.transform(test.values.reshape(-1,1))
     
-    X_train, y_train = create_lstm_dataset(train_scaled)
-    
+    X_train, y_train = create_lstm_dataset(train_scaled, look_back)
     X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
     
     model = Sequential([
-        LSTM(50, activation='relu', input_shape=(X_train.shape[1], 1)),
+        LSTM(lstm_units, activation='relu', input_shape=(look_back, 1)),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse')
     model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=1)
     
-    # Forecast
-    inputs = train_scaled[-60:].reshape(1, 60, 1)
+    # Forecast rolling
+    inputs = train_scaled[-look_back:].reshape(1, look_back, 1)
     preds_scaled = []
     for _ in range(len(test)):
         pred = model.predict(inputs)[0,0]
@@ -59,7 +58,7 @@ def lstm_forecast(train, test, epochs=20, batch_size=32):
     preds = scaler.inverse_transform(np.array(preds_scaled).reshape(-1,1)).flatten()
     return preds
 
-def plot_forecasts(train, test, arima_pred, lstm_pred):
+def plot_forecasts(train, test, arima_pred, lstm_pred, save_path=None):
     plt.figure(figsize=(12,6))
     plt.plot(train.index, train, label='Train')
     plt.plot(test.index, test, label='Test')
@@ -67,7 +66,46 @@ def plot_forecasts(train, test, arima_pred, lstm_pred):
     plt.plot(test.index, lstm_pred, label='LSTM Forecast')
     plt.legend()
     plt.title('TSLA Price Forecast Comparison')
+    if save_path:
+        plt.savefig(save_path)
+        print(f"Plot saved to {save_path}")
     plt.show()
+
+def backtest(train, test, look_back=60, epochs=20, batch_size=32, lstm_units=50):
+    print("Backtesting ARIMA...")
+    arima_preds = []
+    combined = pd.concat([train, test])
+    for i in range(len(test)):
+        train_window = combined[:len(train) + i]
+        model = auto_arima(
+            train_window,
+            seasonal=False,
+            error_action='ignore',
+            suppress_warnings=True,
+            max_p=2, max_q=2,
+            max_order=4,
+            stepwise=True
+        )
+        model.fit(train_window)
+        pred = model.predict(n_periods=1)[0]
+        arima_preds.append(pred)
+
+    print("Backtesting LSTM (rolling forecast)...")
+    lstm_preds = lstm_forecast(
+        train, test,
+        look_back=look_back,
+        epochs=epochs,
+        batch_size=batch_size,
+        lstm_units=lstm_units
+    )
+
+    mae_a, rmse_a, mape_a = evaluate_metrics(test, arima_preds)
+    mae_l, rmse_l, mape_l = evaluate_metrics(test, lstm_preds)
+
+    print(f"Backtested ARIMA MAE: {mae_a:.4f}, RMSE: {rmse_a:.4f}, MAPE: {mape_a:.2f}%")
+    print(f"Backtested LSTM MAE: {mae_l:.4f}, RMSE: {rmse_l:.4f}, MAPE: {mape_l:.2f}%")
+
+    plot_forecasts(train, test, arima_preds, lstm_preds, save_path='backtest_forecast.png')
 
 if __name__ == "__main__":
     prices = pd.read_csv('data/processed/prices.csv', index_col=0, parse_dates=True)
@@ -86,4 +124,7 @@ if __name__ == "__main__":
     print(f"ARIMA MAE: {mae_a:.4f}, RMSE: {rmse_a:.4f}, MAPE: {mape_a:.2f}%")
     print(f"LSTM MAE: {mae_l:.4f}, RMSE: {rmse_l:.4f}, MAPE: {mape_l:.2f}%")
     
-    plot_forecasts(train, test, arima_pred, lstm_pred)
+    plot_forecasts(train, test, arima_pred, lstm_pred, save_path='forecast_comparison.png')
+
+    # Run backtest with rolling window and parameter tuning for ARIMA
+    backtest(train, test)
