@@ -8,7 +8,7 @@ tsla = prices['TSLA'].dropna()
 
 def adf_report(series, name='series'):
     res = adfuller(series, autolag='AIC')
-    adf_stat, pvalue, usedlag, nobs, icbest, critical_values = res
+    adf_stat, pvalue, usedlag, nobs, critical_values, icbest = res
     print(f"ADF test for {name}:")
     print(f"  ADF statistic: {adf_stat:.4f}")
     print(f"  p-value: {pvalue:.4f}")
@@ -16,6 +16,7 @@ def adf_report(series, name='series'):
     for k, v in critical_values.items():
         print(f"    {k}: {v:.4f}")
     return res
+
 
 # ADF on raw price
 adf_report(tsla, 'TSLA price')
